@@ -1,9 +1,12 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using ChillPlayer.Models;
 using ChillPlayer.Web;
+using Newtonsoft.Json.Linq;
 using Octane.Xamarin.Forms.VideoPlayer;
 using Xamarin.Forms;
 using Xamarin.Forms.Xaml;
@@ -48,14 +51,33 @@ namespace ChillPlayer.MarkupExtensions
                 {
                     var videoPageContent = client.GetStringAsync(videoInfoUrl).Result;
                     var videoParameters = HttpUtility.ParseQueryString(videoPageContent);
+
+                    List<YoutubeStream> streams;
                     var encodedStreamsDelimited = WebUtility.HtmlDecode(videoParameters["url_encoded_fmt_stream_map"]);
-                    var encodedStreams = encodedStreamsDelimited.Split(',');
-                    var streams = encodedStreams.Select(HttpUtility.ParseQueryString);
+                    if (!string.IsNullOrEmpty(encodedStreamsDelimited))
+                    {
+                        var encodedStreams = encodedStreamsDelimited.Split(',');
+                        var encodedStreamsParsed = encodedStreams.Select(HttpUtility.ParseQueryString);
+                        streams = encodedStreamsParsed.Select(x => new YoutubeStream()
+                        {
+                            mimeType = x["type"],
+                            quality = x["quality"],
+                            url = x["url"]
+                        }).ToList();
+                    }
+                    else
+                    {
+                        var playerResponse = WebUtility.HtmlDecode(videoParameters["player_response"]);
+                        var playerResponseObject = JObject.Parse(playerResponse);
+                        var streamsList = playerResponseObject["streamingData"]["formats"].ToObject<YoutubeStream[]>();
+                        var adaptiveStreamsList = playerResponseObject["streamingData"]["adaptiveFormats"].ToObject<YoutubeStream[]>();
+                        streams = streamsList.Union(adaptiveStreamsList).ToList();
+                    }
 
                     var streamsByPriority = streams
                         .OrderBy(s =>
                         {
-                            var type = s["type"];
+                            var type = s.mimeType;
                             if (type.Contains("video/mp4")) return 10;
                             if (type.Contains("video/3gpp")) return 20;
                             if (type.Contains("video/x-flv")) return 30;
@@ -64,20 +86,13 @@ namespace ChillPlayer.MarkupExtensions
                         })
                         .ThenBy(s =>
                         {
-                            var quality = s["quality"];
-
-                            switch (Device.Idiom)
-                            {
-                                case TargetIdiom.Phone:
-                                    return Array.IndexOf(new[] { "medium", "high", "small" }, quality);
-                                default:
-                                    return Array.IndexOf(new[] { "high", "medium", "small" }, quality);
-                            }
+                            var quality = s.quality;
+                            return Array.IndexOf(new[] { "medium", "high", "small" }, quality);
                         })
                         .FirstOrDefault();
 
-                    Debug.WriteLine($"Stream URL: {streamsByPriority["url"]}");
-					return VideoSource.FromUri(streamsByPriority["url"]);
+                    Debug.WriteLine($"Stream URL: {streamsByPriority.url}");
+                    return VideoSource.FromUri(streamsByPriority.url);
                 }
             }
             catch (Exception ex)
